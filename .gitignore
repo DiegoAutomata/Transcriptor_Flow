@@ -1,0 +1,27 @@
+# Dependencias
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# SaaS Factory (no pertenece a este proyecto)
+src/
+.claude/
+components.json
+next.config.ts
+package.json
+package-lock.json
+postcss.config.js
+tailwind.config.ts
+tsconfig.json
+GEMINI.md
+README.md
+
+# Modelo Whisper (se descarga automáticamente)
+~/.cache/huggingface/
+
+# Logs
+*.log
+
+# Env
+.env*
