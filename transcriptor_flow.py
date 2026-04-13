@@ -18,7 +18,7 @@ from pynput import keyboard
 # ── Config ────────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16000
 CHANNELS = 1
-MODEL_SIZE = "base"
+MODEL_SIZE = "small"
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
 CPU_THREADS = 4
@@ -94,11 +94,13 @@ def stop_and_transcribe():
 
         segments, info = model.transcribe(
             tmp_path,
-            beam_size=1,
-            best_of=1,
+            beam_size=5,
             language="es",
+            temperature=0,
             vad_filter=True,
+            vad_parameters={"threshold": 0.5},
             condition_on_previous_text=False,
+            no_speech_threshold=0.6,
         )
 
         text = " ".join(seg.text.strip() for seg in segments).strip()
