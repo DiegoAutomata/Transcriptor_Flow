@@ -18,9 +18,10 @@ from pynput import keyboard
 # ── Config ────────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16000
 CHANNELS = 1
-MODEL_SIZE = "tiny"
+MODEL_SIZE = "base"
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
+CPU_THREADS = 4
 
 # ── Estado global ─────────────────────────────────────────────────────────────
 ctrl_pressed = False
@@ -32,7 +33,7 @@ model = None
 lock = threading.Lock()
 
 
-def audio_callback(indata, frames, time_info, status):
+def audio_callback(indata, _frames, _time_info, _status):
     if recording:
         audio_frames.append(indata.copy())
 
@@ -95,8 +96,9 @@ def stop_and_transcribe():
             tmp_path,
             beam_size=1,
             best_of=1,
-            language=None,
+            language="es",
             vad_filter=True,
+            condition_on_previous_text=False,
         )
 
         text = " ".join(seg.text.strip() for seg in segments).strip()
@@ -150,7 +152,7 @@ def main():
     global model
 
     print("Cargando modelo Whisper...")
-    model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
+    model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE, cpu_threads=CPU_THREADS)
     print("Listo. Mantén Ctrl+Alt para grabar.")
 
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
