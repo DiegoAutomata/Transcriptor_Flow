@@ -1,81 +1,50 @@
 #!/usr/bin/env python3
 """
 Transcriptor Flow — Dictado en tiempo real con Ctrl+Alt (push-to-talk)
-El texto aparece frase por frase mientras hablás, sin esperar a soltar las teclas.
+Preview incremental cada ~1s (modelo tiny) + corrección final (modelo small) al soltar.
 """
 
 import os
 import wave
-import queue
-import tempfile
 import threading
+import tempfile
 import subprocess
+import time
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from pynput import keyboard
 
-# ── Config ────────────────────────────────────────────────────────────────────
-SAMPLE_RATE   = 16000
-BLOCK_SIZE    = int(SAMPLE_RATE * 0.1)   # 100ms por callback
-
-RMS_THRESHOLD     = 400   # energía mínima para considerar voz (escala int16)
-SILENCE_BLOCKS    = 5    # 5 × 100ms = 500ms de silencio → fin de frase
-MAX_BUF_BLOCKS    = 30   # 3s acumulados → flush forzado aunque no haya silencio
-MIN_SPEECH_BLOCKS = 3    # 300ms mínimo para transcribir
+SAMPLE_RATE       = 16000
+BLOCK_SIZE        = int(SAMPLE_RATE * 0.1)  # 100ms por callback
+REALTIME_INTERVAL = 1.0                      # segundos entre actualizaciones
+MIN_AUDIO_BLOCKS  = 8                        # 800ms mínimo antes del primer intento
 
 
 class Transcriptor:
     def __init__(self):
-        print("Cargando modelo Whisper...")
-        self.model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
+        print("Cargando modelos Whisper (tiny + small)...")
+        self.tiny  = WhisperModel("tiny",  device="cpu", compute_type="int8", cpu_threads=4)
+        self.small = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
         print("Listo. Mantén Ctrl+Alt para dictar.\n")
 
         self.ctrl = self.alt = self.recording = False
         self.stream = None
         self._lock = threading.Lock()
 
-        # Estado VAD
-        self._buf: list[np.ndarray] = []  # fragmentos de audio del utterance actual
-        self._sil = 0      # bloques de silencio consecutivos
-        self._sph = 0      # bloques con voz acumulados
-        self._active = False
-
-        # Cola → worker serializa transcripción e inyección
-        self._q: queue.Queue = queue.Queue()
-        threading.Thread(target=self._worker, daemon=True).start()
+        self._full_buf: list[np.ndarray] = []
+        self._buf_lock  = threading.Lock()
+        self._injected  = ""           # texto ya inyectado en la app activa
+        self._rt_event  = threading.Event()
+        self._rt_thread: threading.Thread | None = None
 
     # ── Audio ──────────────────────────────────────────────────────────────────
 
-    def _callback(self, indata, _frames, _time_info, _status):
+    def _callback(self, indata, _f, _t, _s):
         if not self.recording:
             return
-
-        chunk = indata[:, 0]  # float32, mono
-        rms = float(np.sqrt(np.mean((chunk * 32767) ** 2)))
-
-        if rms > RMS_THRESHOLD:
-            self._active = True
-            self._sil = 0
-            self._sph += 1
-            self._buf.append(chunk.copy())
-            # Flush forzado si se acumula demasiado audio sin pausas
-            if len(self._buf) >= MAX_BUF_BLOCKS:
-                self._flush()
-        elif self._active:
-            self._sil += 1
-            self._buf.append(chunk.copy())
-            if self._sil >= SILENCE_BLOCKS:
-                self._flush()
-
-    def _flush(self, final=False):
-        """Encola el fragmento actual para transcripción y resetea el estado."""
-        min_sph = 1 if final else MIN_SPEECH_BLOCKS
-        if self._sph >= min_sph and self._buf:
-            self._q.put(np.concatenate(self._buf))
-        self._buf = []
-        self._sil = self._sph = 0
-        self._active = False
+        with self._buf_lock:
+            self._full_buf.append(indata[:, 0].copy())
 
     # ── Start / Stop ───────────────────────────────────────────────────────────
 
@@ -84,9 +53,11 @@ class Transcriptor:
             if self.recording:
                 return
             self.recording = True
-            self._buf = []
-            self._sil = self._sph = 0
-            self._active = False
+            self._injected = ""
+            self._full_buf = []
+
+        self._rt_event.clear()
+        self._rt_thread = threading.Thread(target=self._realtime_loop, daemon=True)
 
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE, channels=1,
@@ -94,6 +65,7 @@ class Transcriptor:
             callback=self._callback,
         )
         self.stream.start()
+        self._rt_thread.start()
         print("[●] Grabando...")
 
     def stop(self):
@@ -102,23 +74,47 @@ class Transcriptor:
                 return
             self.recording = False
 
+        # Detener loop realtime y esperar que termine
+        self._rt_event.set()
+        if self._rt_thread:
+            self._rt_thread.join(timeout=5.0)
+
         self.stream.stop()
         self.stream.close()
         self.stream = None
 
-        # Transcribir lo que quedó en el buffer (frase incompleta al soltar teclas)
-        self._flush(final=True)
+        # Transcripción final con small (más precisa)
+        with self._buf_lock:
+            buf = list(self._full_buf)
+
+        if buf:
+            audio = np.concatenate(buf)
+            final = self._transcribe(audio, self.small)
+            print(f"  [final] {final}")
+            self._update_injected(final)
+            if final:
+                self._xdotool_type(" ")
+
+        self._injected = ""
         print("[◼] Detenido.")
 
-    # ── Worker: transcripción + inyección secuencial ───────────────────────────
+    # ── Loop realtime (modelo tiny) ────────────────────────────────────────────
 
-    def _worker(self):
-        while True:
-            audio = self._q.get()
-            self._transcribe(audio)
-            self._q.task_done()
+    def _realtime_loop(self):
+        while not self._rt_event.wait(REALTIME_INTERVAL):
+            with self._buf_lock:
+                if len(self._full_buf) < MIN_AUDIO_BLOCKS:
+                    continue
+                audio = np.concatenate(self._full_buf)
 
-    def _transcribe(self, audio: np.ndarray):
+            text = self._transcribe(audio, self.tiny)
+            if text:
+                print(f"  [rt] {text}")
+                self._update_injected(text)
+
+    # ── Transcripción ─────────────────────────────────────────────────────────
+
+    def _transcribe(self, audio: np.ndarray, model: WhisperModel) -> str:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp = f.name
 
@@ -129,23 +125,49 @@ class Transcriptor:
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(pcm.tobytes())
 
-        segs, _ = self.model.transcribe(
-            tmp,
-            language="es",
-            beam_size=5,
-            temperature=0,
-            vad_filter=True,
-            vad_parameters={"threshold": 0.5},
-            no_speech_threshold=0.6,
-            condition_on_previous_text=False,
+        segs, _ = model.transcribe(
+            tmp, language="es", beam_size=5, temperature=0,
+            vad_filter=True, vad_parameters={"threshold": 0.5},
+            no_speech_threshold=0.6, condition_on_previous_text=False,
         )
         text = " ".join(s.text.strip() for s in segs).strip()
         os.unlink(tmp)
+        return text
 
-        if text:
-            print(f"  → {text}")
+    # ── Inyección inteligente ─────────────────────────────────────────────────
+
+    def _update_injected(self, new_text: str):
+        """Solo inyecta el delta; corrige el prefijo si Whisper cambió algo."""
+        if new_text == self._injected:
+            return
+
+        if new_text.startswith(self._injected):
+            # Solo palabras nuevas al final
+            delta = new_text[len(self._injected):]
+            if delta:
+                self._xdotool_type(delta)
+        else:
+            # Whisper corrigió texto anterior → borrar solo lo que cambió
+            common = len(os.path.commonprefix([self._injected, new_text]))
+            n_back = len(self._injected) - common
+            delta  = new_text[common:]
+            if n_back:
+                self._xdotool_backspace(n_back)
+            if delta:
+                self._xdotool_type(delta)
+
+        self._injected = new_text
+
+    def _xdotool_type(self, text: str):
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", "--delay", "5", text],
+            check=False,
+        )
+
+    def _xdotool_backspace(self, n: int):
+        if n > 0:
             subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--delay", "5", text + " "],
+                ["xdotool", "key", "--clearmodifiers", "--repeat", str(n), "BackSpace"],
                 check=False,
             )
 
