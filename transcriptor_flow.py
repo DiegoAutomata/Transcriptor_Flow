@@ -19,8 +19,9 @@ from pynput import keyboard
 SAMPLE_RATE   = 16000
 BLOCK_SIZE    = int(SAMPLE_RATE * 0.1)   # 100ms por callback
 
-RMS_THRESHOLD    = 400    # energía mínima para considerar voz (escala int16)
-SILENCE_BLOCKS   = 6     # 6 × 100ms = 600ms de silencio → fin de frase
+RMS_THRESHOLD     = 400   # energía mínima para considerar voz (escala int16)
+SILENCE_BLOCKS    = 5    # 5 × 100ms = 500ms de silencio → fin de frase
+MAX_BUF_BLOCKS    = 30   # 3s acumulados → flush forzado aunque no haya silencio
 MIN_SPEECH_BLOCKS = 3    # 300ms mínimo para transcribir
 
 
@@ -58,6 +59,9 @@ class Transcriptor:
             self._sil = 0
             self._sph += 1
             self._buf.append(chunk.copy())
+            # Flush forzado si se acumula demasiado audio sin pausas
+            if len(self._buf) >= MAX_BUF_BLOCKS:
+                self._flush()
         elif self._active:
             self._sil += 1
             self._buf.append(chunk.copy())
