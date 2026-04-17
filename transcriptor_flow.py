@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Transcriptor Flow — Dictado por voz con Ctrl+Alt (push-to-talk)
-Transcripción local con faster-whisper (gratis, sin API)
+Transcriptor Flow — Dictado en tiempo real con Ctrl+Alt (push-to-talk)
+El texto aparece frase por frase mientras hablás, sin esperar a soltar las teclas.
 """
 
 import os
-import time
 import wave
+import queue
 import tempfile
 import threading
 import subprocess
@@ -16,153 +16,162 @@ from faster_whisper import WhisperModel
 from pynput import keyboard
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SAMPLE_RATE = 16000
-CHANNELS = 1
-MODEL_SIZE = "small"
-DEVICE = "cpu"
-COMPUTE_TYPE = "int8"
-CPU_THREADS = 4
+SAMPLE_RATE   = 16000
+BLOCK_SIZE    = int(SAMPLE_RATE * 0.1)   # 100ms por callback
 
-# ── Estado global ─────────────────────────────────────────────────────────────
-ctrl_pressed = False
-alt_pressed = False
-recording = False
-audio_frames = []
-stream = None
-model = None
-lock = threading.Lock()
+RMS_THRESHOLD    = 400    # energía mínima para considerar voz (escala int16)
+SILENCE_BLOCKS   = 6     # 6 × 100ms = 600ms de silencio → fin de frase
+MIN_SPEECH_BLOCKS = 3    # 300ms mínimo para transcribir
 
 
-def audio_callback(indata, _frames, _time_info, _status):
-    if recording:
-        audio_frames.append(indata.copy())
+class Transcriptor:
+    def __init__(self):
+        print("Cargando modelo Whisper...")
+        self.model = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
+        print("Listo. Mantén Ctrl+Alt para dictar.\n")
 
+        self.ctrl = self.alt = self.recording = False
+        self.stream = None
+        self._lock = threading.Lock()
 
-def start_recording():
-    global recording, audio_frames, stream
-    with lock:
-        if recording:
+        # Estado VAD
+        self._buf: list[np.ndarray] = []  # fragmentos de audio del utterance actual
+        self._sil = 0      # bloques de silencio consecutivos
+        self._sph = 0      # bloques con voz acumulados
+        self._active = False
+
+        # Cola → worker serializa transcripción e inyección
+        self._q: queue.Queue = queue.Queue()
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    # ── Audio ──────────────────────────────────────────────────────────────────
+
+    def _callback(self, indata, _frames, _time_info, _status):
+        if not self.recording:
             return
-        audio_frames = []
-        recording = True
 
-    stream = sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=CHANNELS,
-        dtype="float32",
-        callback=audio_callback,
-        blocksize=1024,
-    )
-    stream.start()
-    print("[●] Grabando...")
+        chunk = indata[:, 0]  # float32, mono
+        rms = float(np.sqrt(np.mean((chunk * 32767) ** 2)))
 
+        if rms > RMS_THRESHOLD:
+            self._active = True
+            self._sil = 0
+            self._sph += 1
+            self._buf.append(chunk.copy())
+        elif self._active:
+            self._sil += 1
+            self._buf.append(chunk.copy())
+            if self._sil >= SILENCE_BLOCKS:
+                self._flush()
 
-def stop_and_transcribe():
-    global recording, stream
+    def _flush(self, final=False):
+        """Encola el fragmento actual para transcripción y resetea el estado."""
+        min_sph = 1 if final else MIN_SPEECH_BLOCKS
+        if self._sph >= min_sph and self._buf:
+            self._q.put(np.concatenate(self._buf))
+        self._buf = []
+        self._sil = self._sph = 0
+        self._active = False
 
-    with lock:
-        if not recording:
-            return
-        recording = False
+    # ── Start / Stop ───────────────────────────────────────────────────────────
 
-    if stream:
-        stream.stop()
-        stream.close()
-        stream = None
+    def start(self):
+        with self._lock:
+            if self.recording:
+                return
+            self.recording = True
+            self._buf = []
+            self._sil = self._sph = 0
+            self._active = False
 
-    if not audio_frames:
-        return
+        self.stream = sd.InputStream(
+            samplerate=SAMPLE_RATE, channels=1,
+            dtype=np.float32, blocksize=BLOCK_SIZE,
+            callback=self._callback,
+        )
+        self.stream.start()
+        print("[●] Grabando...")
 
-    audio_data = np.concatenate(audio_frames, axis=0)
-    duration = len(audio_data) / SAMPLE_RATE
+    def stop(self):
+        with self._lock:
+            if not self.recording:
+                return
+            self.recording = False
 
-    if duration < 0.3:
-        return
+        self.stream.stop()
+        self.stream.close()
+        self.stream = None
 
-    print(f"[◼] {duration:.1f}s — transcribiendo...")
+        # Transcribir lo que quedó en el buffer (frase incompleta al soltar teclas)
+        self._flush(final=True)
+        print("[◼] Detenido.")
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
+    # ── Worker: transcripción + inyección secuencial ───────────────────────────
 
-    try:
-        audio_int16 = (audio_data * 32767).astype(np.int16)
-        with wave.open(tmp_path, "w") as wf:
-            wf.setnchannels(CHANNELS)
+    def _worker(self):
+        while True:
+            audio = self._q.get()
+            self._transcribe(audio)
+            self._q.task_done()
+
+    def _transcribe(self, audio: np.ndarray):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            tmp = f.name
+
+        pcm = (audio * 32767).astype(np.int16)
+        with wave.open(tmp, "wb") as wf:
+            wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(SAMPLE_RATE)
-            wf.writeframes(audio_int16.tobytes())
+            wf.writeframes(pcm.tobytes())
 
-        segments, info = model.transcribe(
-            tmp_path,
-            beam_size=5,
+        segs, _ = self.model.transcribe(
+            tmp,
             language="es",
+            beam_size=5,
             temperature=0,
             vad_filter=True,
             vad_parameters={"threshold": 0.5},
-            condition_on_previous_text=False,
             no_speech_threshold=0.6,
+            condition_on_previous_text=False,
         )
+        text = " ".join(s.text.strip() for s in segs).strip()
+        os.unlink(tmp)
 
-        text = " ".join(seg.text.strip() for seg in segments).strip()
+        if text:
+            print(f"  → {text}")
+            subprocess.run(
+                ["xdotool", "type", "--clearmodifiers", "--delay", "5", text + " "],
+                check=False,
+            )
 
-        if not text:
-            return
+    # ── Teclado ────────────────────────────────────────────────────────────────
 
-        print(f"[✓] {text}")
+    def _check(self):
+        want = self.ctrl and self.alt
+        if want and not self.recording:
+            self.start()
+        elif not want and self.recording:
+            self.stop()
 
-        # Pausa para que el SO registre que se soltaron Ctrl+Alt
-        time.sleep(0.2)
-        subprocess.run(
-            ["xdotool", "type", "--clearmodifiers", "--delay", "20", text + " "],
-            check=True,
-        )
+    def on_press(self, key):
+        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+            self.ctrl = True
+        elif key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
+            self.alt = True
+        self._check()
 
-    except Exception as e:
-        print(f"[ERROR] {e}")
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    def on_release(self, key):
+        if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+            self.ctrl = False
+        elif key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
+            self.alt = False
+        self._check()
 
-
-def on_press(key):
-    global ctrl_pressed, alt_pressed
-    if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
-        ctrl_pressed = True
-    elif key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
-        alt_pressed = True
-
-    # Iniciar grabación en cuanto ambas modificadoras estén presionadas
-    if ctrl_pressed and alt_pressed and not recording:
-        threading.Thread(target=start_recording, daemon=True).start()
-
-
-def on_release(key):
-    global ctrl_pressed, alt_pressed
-    if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
-        ctrl_pressed = False
-    elif key in (keyboard.Key.alt_l, keyboard.Key.alt_r):
-        alt_pressed = False
-    else:
-        return
-
-    # Detener en cuanto se suelte cualquiera de las dos
-    if recording:
-        threading.Thread(target=stop_and_transcribe, daemon=True).start()
-
-
-def main():
-    global model
-
-    print("Cargando modelo Whisper...")
-    model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE, cpu_threads=CPU_THREADS)
-    print("Listo. Mantén Ctrl+Alt para grabar.")
-
-    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-        try:
-            listener.join()
-        except KeyboardInterrupt:
-            pass
+    def run(self):
+        with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as lst:
+            lst.join()
 
 
 if __name__ == "__main__":
-    main()
+    Transcriptor().run()
