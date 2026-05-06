@@ -96,3 +96,23 @@ echo -e "  Deshabilitar:      ${CYAN}systemctl --user disable transcriptor-flow$
 echo ""
 echo -e "  Logs de la app:    ${CYAN}~/.local/share/transcriptor-flow/logs/${NC}"
 echo ""
+
+# ── WSL: Instrucciones del bridge ──────────────────────────────────────
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    echo -e "${YELLOW}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║   Detectado WSL — Bridge Win32 necesario ║${NC}"
+    echo -e "${YELLOW}╚══════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${CYAN}Transcriptor Flow usa TCP para recibir Ctrl+Alt desde Windows.${NC}"
+    echo -e "  ${CYAN}Debes iniciar el bridge en Windows:${NC}"
+    echo ""
+    echo -e "    Opción 1: Doble clic en:"
+    echo -e "      ${CYAN}\\\\wsl\$\\Ubuntu$SCRIPT_DIR\\start_bridge.bat${NC}"
+    echo ""
+    echo -e "    Opción 2: Ejecutar en Windows PowerShell:"
+    echo -e "      ${CYAN}python \\\\wsl\$\\Ubuntu$SCRIPT_DIR\\src\\bridge_win32.py${NC}"
+    echo ""
+    echo -e "    Opción 3: Poner start_bridge.bat en Inicio de Windows"
+    echo -e "      (Win+R → shell:startup → copiar start_bridge.bat allí)"
+    echo ""
+fi

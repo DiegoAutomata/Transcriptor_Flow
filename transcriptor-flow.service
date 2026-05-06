@@ -5,6 +5,10 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer
 ExecStart=%h/Transcriptor-Flow/.venv/bin/python -m src.daemon
 WorkingDirectory=%h/Transcriptor-Flow
 Restart=on-failure

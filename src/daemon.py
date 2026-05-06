@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import signal
+import subprocess
 import logging
 import logging.handlers
 import threading
@@ -21,6 +22,15 @@ from .tray_icon import TrayIcon
 
 
 logger = logging.getLogger("transcriptor-flow")
+
+
+def _is_wsl() -> bool:
+    """Detecta si se está ejecutando dentro de WSL."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
 
 
 def setup_logging(debug: bool = False) -> None:
@@ -60,9 +70,11 @@ class Daemon:
         self._injector = TextInjector()
         self._tray: TrayIcon | None = None
         self._keyboard: KeyboardHandler | None = None
+        self._bridge_proc: subprocess.Popen | None = None
 
         # Estado de texto inyectado durante la sesión de grabación
         self._injected_text = ""
+        self._last_transcription = ""
 
         # Hilo de transcripción en tiempo real
         self._rt_stop = threading.Event()
@@ -76,16 +88,24 @@ class Daemon:
         logger.info("Transcriptor Flow %s iniciando…", config.VERSION)
 
         self._tray = TrayIcon(on_exit=self.shutdown)
-        self._tray.start()
-        self._tray.set_idle()
+        if not _is_wsl():
+            self._tray.start()
+            self._tray.set_idle()
 
         self._transcriber = Transcriber()
 
+        mode = "socket" if _is_wsl() else "pynput"
+        logger.info("Modo de teclado: %s", mode)
         self._keyboard = KeyboardHandler(
             on_activate=self._start_recording,
             on_deactivate=self._stop_recording,
+            mode=mode,
         )
         self._keyboard.start()
+
+        # En WSL, iniciar el bridge de Windows si Python está disponible
+        if _is_wsl():
+            self._start_win32_bridge()
 
         notify("Transcriptor Flow", "Listo — mantén Ctrl+Alt para dictar.", urgency="low")
         logger.info("Demonio listo. Ctrl+Alt para dictar.")
@@ -115,6 +135,13 @@ class Daemon:
         if self._tray:
             self._tray.stop()
 
+        # Matar el bridge de Windows si existe
+        if hasattr(self, "_bridge_proc") and self._bridge_proc:
+            try:
+                self._bridge_proc.terminate()
+            except Exception:
+                pass
+
         self._shutdown.set()
         logger.info("Transcriptor Flow detenido.")
 
@@ -127,20 +154,28 @@ class Daemon:
             self._recording = True
             self._injected_text = ""
 
-        self._audio.start()
+        try:
+            self._audio.start(prefer_pulse=_is_wsl())
+        except Exception:
+            logger.exception("No se pudo iniciar la captura de audio")
+            with self._lock:
+                self._recording = False
+            if self._tray:
+                self._tray.set_error("Micrófono no disponible")
+            return
         self._rt_stop.clear()
         self._rt_thread = threading.Thread(target=self._realtime_loop, daemon=True)
         self._rt_thread.start()
 
-        if self._tray:
+        if self._tray and not _is_wsl():
             self._tray.set_recording()
 
         logger.info("Grabación iniciada.")
 
-    def _stop_recording(self) -> None:
+    def _stop_recording(self) -> str:
         with self._lock:
             if not self._recording:
-                return
+                return ""
             self._recording = False
 
         self._rt_stop.set()
@@ -151,7 +186,7 @@ class Daemon:
 
         if audio is None or len(audio) == 0:
             logger.info("Sin audio para transcribir.")
-            return
+            return ""
 
         logger.info("Transcribiendo final con modelo small…")
         try:
@@ -160,7 +195,7 @@ class Daemon:
             logger.exception("Error en transcripción final")
             if self._tray:
                 self._tray.set_error("Error al transcribir")
-            return
+            return ""
 
         if final_text:
             logger.info("Texto final: %s", final_text)
@@ -170,7 +205,9 @@ class Daemon:
         if final_text:
             self._injector.type_text(" ")
         self._injected_text = ""
+        self._last_transcription = final_text or ""
         logger.info("Grabación finalizada.")
+        return self._last_transcription
 
     # ── Loop realtime ──────────────────────────────────────────────────────
 
@@ -200,6 +237,19 @@ class Daemon:
                 logger.debug("[rt %.1fs] %s", dt, text)
                 if not self._rt_stop.is_set():
                     self._injected_text = self._injector.append_delta(text, self._injected_text)
+
+    # ── Bridge Win32 (WSL) ────────────────────────────────────────────────
+
+    def _start_win32_bridge(self) -> None:
+        """Muestra instrucciones para iniciar el bridge en Windows."""
+        logger.info(
+            "Modo WSL detectado. El bridge Win32 debe ejecutarse en Windows.\n"
+            "  Opción 1: Ejecutá manualmente:\n"
+            "    python \\\\wsl$\\Ubuntu\\home\\diego\\Transcriptor-Flow\\src\\bridge_win32.py\n"
+            "  Opción 2: Doble clic en start_bridge.bat (en el proyecto)\n"
+            "  Opción 3: Agregá start_bridge.bat al inicio de Windows"
+        )
+        self._bridge_proc = None
 
 
 def main() -> None:
