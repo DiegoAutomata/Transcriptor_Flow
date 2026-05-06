@@ -103,7 +103,11 @@ while ($true) {
         }
         $lastPreviewText = ""
         $nextPreview = (Get-Date).AddMilliseconds($PREVIEW_MS)
-        try { $savedClip = Get-Clipboard -Raw -ErrorAction Stop } catch { $savedClip = "" }
+        try {
+            $savedClip = Get-Clipboard -Raw -ErrorAction Stop
+        } catch {
+            $savedClip = ""
+        }
     }
     # Falling edge — stop, get final text, inject
     elseif (-not $active -and $wasActive) {
@@ -125,7 +129,10 @@ while ($true) {
         # Restore original clipboard
         if ($savedClip) {
             Start-Sleep -Milliseconds 100
-            try { Set-Clipboard -Value $savedClip } catch {}
+            try {
+                Set-Clipboard -Value $savedClip
+            } catch {
+            }
             $savedClip = ""
         }
     }
