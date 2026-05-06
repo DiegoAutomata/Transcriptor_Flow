@@ -16,8 +16,8 @@ WHISPER_BEAM_SIZE        = 5
 WHISPER_CPU_THREADS      = 4
 
 # VAD: más permisivo para español, evita cortar frases
-WHISPER_VAD_THRESHOLD      = 0.3
-WHISPER_NO_SPEECH_THRESH   = 0.4
+WHISPER_VAD_THRESHOLD      = 0.2
+WHISPER_NO_SPEECH_THRESH   = 0.3
 WHISPER_VAD_MIN_SILENCE_MS = 100
 
 # Realtime (tiny): más rápido, más agresivo

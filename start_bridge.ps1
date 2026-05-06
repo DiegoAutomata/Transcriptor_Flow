@@ -17,6 +17,7 @@ public class Kb {
 }
 '@
 Add-Type -TypeDefinition $typeCode
+Add-Type -AssemblyName System.Windows.Forms
 
 $wshell = New-Object -ComObject "WScript.Shell"
 
@@ -41,16 +42,17 @@ function Send-Tcp($cmd) {
 }
 
 function Inject-Full($text) {
-    if ($text.Length -eq 0) {
+    if (-not $text -or $text.Trim().Length -eq 0) {
         return
     }
     try {
-        Set-Clipboard -Value $text
-        Start-Sleep -Milliseconds 10
-        $wshell.SendKeys("^a")
-        Start-Sleep -Milliseconds 15
-        $wshell.SendKeys("^v")
+        $text | clip.exe
+        Start-Sleep -Milliseconds 30
+        [System.Windows.Forms.SendKeys]::SendWait("^a")
+        Start-Sleep -Milliseconds 30
+        [System.Windows.Forms.SendKeys]::SendWait("^v")
     } catch {
+        Write-Host "  Inject ERROR: $_" -ForegroundColor Red
     }
 }
 
@@ -83,7 +85,6 @@ $VK_CONTROL = 0x11
 $VK_MENU    = 0x12
 $wasActive = $false
 $lastPreviewText = ""
-$savedClip = ""
 $nextPreview = (Get-Date).AddDays(-1)
 
 while ($true) {
@@ -103,12 +104,6 @@ while ($true) {
         }
         $lastPreviewText = ""
         $nextPreview = (Get-Date).AddMilliseconds($PREVIEW_MS)
-        try {
-            $savedClip = Get-Clipboard -Raw -ErrorAction Stop
-        }
-        catch {
-            $savedClip = ""
-        }
     }
     elseif ((-not $active) -and $wasActive) {
         $time = Get-Date -Format "HH:mm:ss"
@@ -128,15 +123,6 @@ while ($true) {
             Write-Host "  FAILED: $r" -ForegroundColor Red
         }
         $lastPreviewText = ""
-        if ($savedClip) {
-            Start-Sleep -Milliseconds 100
-            try {
-                Set-Clipboard -Value $savedClip
-            }
-            catch {
-            }
-            $savedClip = ""
-        }
     }
     elseif ($active -and $wasActive) {
         $now = Get-Date
