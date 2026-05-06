@@ -1,12 +1,14 @@
 # Transcriptor Flow Bridge - PowerShell
 # Detecta Ctrl+Alt y notifica al daemon en WSL via TCP
 # Recibe texto transcrito y lo inyecta en la app activa de Windows
+# Preview en tiempo real cada 200ms mientras se mantienen las teclas
 
 $Host.UI.RawUI.WindowTitle = "Transcriptor Flow Bridge"
 
 $HOST_ADDR = "127.0.0.1"
 $PORT = 19876
 $POLL_MS = 50
+$PREVIEW_MS = 200
 
 Add-Type @"
 using System;
@@ -16,6 +18,8 @@ public class Kb {
     public static extern short GetAsyncKeyState(int vKey);
 }
 "@
+
+$wshell = New-Object -ComObject WScript.Shell
 
 function IsPressed($vk) {
     return ([Kb]::GetAsyncKeyState($vk) -band 0x8000) -ne 0
@@ -37,30 +41,22 @@ function Send-Tcp($cmd) {
     }
 }
 
-function Inject-Text($text) {
-    if (-not $text -or $text.Trim().Length -eq 0) {
-        return
-    }
+function Inject-Full($text) {
+    if (-not $text) { return }
     try {
-        $prevClip = Get-Clipboard -Raw -ErrorAction SilentlyContinue
         Set-Clipboard -Value $text
-        Start-Sleep -Milliseconds 30
+        Start-Sleep -Milliseconds 10
+        $wshell.SendKeys("^a")
+        Start-Sleep -Milliseconds 15
         $wshell.SendKeys("^v")
-        Start-Sleep -Milliseconds 80
-        if ($prevClip) {
-            Start-Sleep -Milliseconds 50
-            Set-Clipboard -Value $prevClip
-        }
     } catch {
-        Write-Host "  Inject fallo: $_" -ForegroundColor Red
+        # silently ignore
     }
 }
 
-$wshell = New-Object -ComObject WScript.Shell
-
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  Transcriptor Flow Bridge (PowerShell)" -ForegroundColor White
-Write-Host "  Hold Ctrl+Alt to dictate in ANY app" -ForegroundColor Gray
+Write-Host "  Transcriptor Flow Bridge v6.1" -ForegroundColor White
+Write-Host "  Hold Ctrl+Alt to dictate — live preview while holding" -ForegroundColor Gray
 Write-Host "  Ctrl+C to exit" -ForegroundColor Gray
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -85,24 +81,31 @@ if (-not $connected) {
 
 $VK_CONTROL = 0x11
 $VK_MENU    = 0x12
-$wasActive = $false
+$wasActive  = $false
+$lastPreviewText = ""
+$savedClip = ""
+$nextPreview = [DateTime]::MinValue
 
 while ($true) {
     $ctrl = IsPressed $VK_CONTROL
     $alt  = IsPressed $VK_MENU
     $active = $ctrl -and $alt
 
+    # Rising edge — start recording
     if ($active -and -not $wasActive) {
         $time = Get-Date -Format "HH:mm:ss"
         Write-Host "[$time] Ctrl+Alt -> recording" -ForegroundColor Red
         $r = Send-Tcp "start"
         if ($r -match "ok") {
             Write-Host "  OK" -ForegroundColor Green
-        }
-        else {
+        } else {
             Write-Host "  FAILED" -ForegroundColor Red
         }
+        $lastPreviewText = ""
+        $nextPreview = (Get-Date).AddMilliseconds($PREVIEW_MS)
+        try { $savedClip = Get-Clipboard -Raw -ErrorAction Stop } catch { $savedClip = "" }
     }
+    # Falling edge — stop, get final text, inject
     elseif (-not $active -and $wasActive) {
         $time = Get-Date -Format "HH:mm:ss"
         Write-Host "[$time] Ctrl+Alt released -> transcribing..." -ForegroundColor Gray
@@ -111,13 +114,33 @@ while ($true) {
             $texto = $matches[1]
             if ($texto) {
                 Write-Host "  Text: $texto" -ForegroundColor Green
-                Inject-Text $texto
+                Inject-Full $texto
             } else {
                 Write-Host "  (nothing transcribed)" -ForegroundColor DarkGray
             }
-        }
-        else {
+        } else {
             Write-Host "  FAILED: $r" -ForegroundColor Red
+        }
+        $lastPreviewText = ""
+        # Restore original clipboard
+        if ($savedClip) {
+            Start-Sleep -Milliseconds 100
+            try { Set-Clipboard -Value $savedClip } catch {}
+            $savedClip = ""
+        }
+    }
+    # Holding — poll preview periodically
+    elseif ($active -and $wasActive) {
+        if ((Get-Date) -ge $nextPreview) {
+            $r = Send-Tcp "preview"
+            if ($r -match "^text: (.*)") {
+                $texto = $matches[1]
+                if ($texto -and $texto -ne $lastPreviewText) {
+                    Inject-Full $texto
+                    $lastPreviewText = $texto
+                }
+            }
+            $nextPreview = (Get-Date).AddMilliseconds($PREVIEW_MS)
         }
     }
 

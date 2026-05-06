@@ -25,10 +25,12 @@ class KeyboardHandler:
         self,
         on_activate: Callable[[], None],
         on_deactivate: Callable[[], str],
+        on_preview: Callable[[], str] | None = None,
         mode: str = "pynput",
     ) -> None:
         self._on_activate = on_activate
         self._on_deactivate = on_deactivate
+        self._on_preview = on_preview or (lambda: "")
         self._mode = mode
         self._listener: threading.Thread | None = None
         self._server: socket.socket | None = None
@@ -137,6 +139,9 @@ class KeyboardHandler:
                     conn.sendall(f"text: {text}\n".encode("utf-8"))
                 elif data == "ping":
                     conn.sendall(b"pong\n")
+                elif data == "preview" and self._active:
+                    text = self._on_preview()
+                    conn.sendall(f"text: {text}\n".encode("utf-8"))
                 else:
                     conn.sendall(b"unknown command\n")
             except Exception:

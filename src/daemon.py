@@ -99,6 +99,7 @@ class Daemon:
         self._keyboard = KeyboardHandler(
             on_activate=self._start_recording,
             on_deactivate=self._stop_recording,
+            on_preview=self._get_preview_text,
             mode=mode,
         )
         self._keyboard.start()
@@ -188,9 +189,9 @@ class Daemon:
             logger.info("Sin audio para transcribir.")
             return ""
 
-        logger.info("Transcribiendo final con modelo small…")
+        logger.info("Transcribiendo final con modelo tiny…")
         try:
-            final_text = self._transcriber.transcribe_final(audio)
+            final_text = self._transcriber.transcribe_realtime(audio)
         except Exception:
             logger.exception("Error en transcripción final")
             if self._tray:
@@ -208,6 +209,10 @@ class Daemon:
         self._last_transcription = final_text or ""
         logger.info("Grabación finalizada.")
         return self._last_transcription
+
+    def _get_preview_text(self) -> str:
+        """Devuelve el texto en tiempo real actual (para el bridge)."""
+        return self._injected_text
 
     # ── Loop realtime ──────────────────────────────────────────────────────
 
