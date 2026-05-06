@@ -2,3 +2,5 @@ faster-whisper
 sounddevice
 numpy
 pynput
+pystray
+Pillow

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Ejecución manual para desarrollo/debug
 cd "$(dirname "$0")"
-export DISPLAY="${DISPLAY:-:0}"
-.venv/bin/python transcriptor_flow.py
+source .venv/bin/activate 2>/dev/null || true
+exec python -m src.daemon "$@"

@@ -1,0 +1,20 @@
+[Unit]
+Description=Transcriptor Flow — Dictado por voz en tiempo real
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/Transcriptor-Flow/.venv/bin/python -m src.daemon
+WorkingDirectory=%h/Transcriptor-Flow
+Restart=on-failure
+RestartSec=10
+RestartSteps=5
+RestartMaxDelaySec=120
+
+# Limpieza al detener
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target
