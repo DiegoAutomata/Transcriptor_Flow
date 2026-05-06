@@ -74,6 +74,7 @@ class Daemon:
 
         # Estado de texto inyectado durante la sesión de grabación
         self._injected_text = ""
+        self._raw_preview_text = ""
         self._last_transcription = ""
 
         # Hilo de transcripción en tiempo real
@@ -154,6 +155,7 @@ class Daemon:
                 return
             self._recording = True
             self._injected_text = ""
+            self._raw_preview_text = ""
 
         try:
             self._audio.start(prefer_pulse=_is_wsl())
@@ -211,8 +213,8 @@ class Daemon:
         return self._last_transcription
 
     def _get_preview_text(self) -> str:
-        """Devuelve el texto en tiempo real actual (para el bridge)."""
-        return self._injected_text
+        """Devuelve el texto en tiempo real crudo (para el bridge)."""
+        return self._raw_preview_text
 
     # ── Loop realtime ──────────────────────────────────────────────────────
 
@@ -239,7 +241,8 @@ class Daemon:
             dt = time.time() - t0
 
             if text:
-                logger.debug("[rt %.1fs] %s", dt, text)
+                logger.info("[rt %.1fs] %s", dt, text)
+                self._raw_preview_text = text
                 if not self._rt_stop.is_set():
                     self._injected_text = self._injector.append_delta(text, self._injected_text)
 

@@ -14,7 +14,11 @@ from .config import (
     WHISPER_BEAM_SIZE,
     WHISPER_VAD_THRESHOLD,
     WHISPER_NO_SPEECH_THRESH,
+    WHISPER_VAD_MIN_SILENCE_MS,
     WHISPER_CPU_THREADS,
+    RT_VAD_THRESHOLD,
+    RT_NO_SPEECH_THRESH,
+    RT_VAD_MIN_SILENCE_MS,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,13 +42,20 @@ class Transcriber:
 
     def transcribe_realtime(self, audio: np.ndarray) -> str:
         """Transcribe con modelo tiny (rápido, preview en vivo)."""
-        return self._transcribe(audio, self._tiny)
+        return self._transcribe(audio, self._tiny, vad_threshold=RT_VAD_THRESHOLD,
+                                no_speech_threshold=RT_NO_SPEECH_THRESH,
+                                min_silence_ms=RT_VAD_MIN_SILENCE_MS)
 
     def transcribe_final(self, audio: np.ndarray) -> str:
         """Transcribe con modelo small (preciso, resultado final)."""
-        return self._transcribe(audio, self._small)
+        return self._transcribe(audio, self._small, vad_threshold=WHISPER_VAD_THRESHOLD,
+                                no_speech_threshold=WHISPER_NO_SPEECH_THRESH,
+                                min_silence_ms=WHISPER_VAD_MIN_SILENCE_MS,
+                                condition_on_previous=True)
 
-    def _transcribe(self, audio: np.ndarray, model: WhisperModel) -> str:
+    def _transcribe(self, audio: np.ndarray, model: WhisperModel,
+                    vad_threshold: float = 0.5, no_speech_threshold: float = 0.6,
+                    min_silence_ms: int = 100, condition_on_previous: bool = False) -> str:
         tmp = ""
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -62,9 +73,14 @@ class Transcriber:
                 beam_size=WHISPER_BEAM_SIZE,
                 temperature=0,
                 vad_filter=True,
-                vad_parameters={"threshold": WHISPER_VAD_THRESHOLD},
-                no_speech_threshold=WHISPER_NO_SPEECH_THRESH,
-                condition_on_previous_text=False,
+                vad_parameters={
+                    "threshold": vad_threshold,
+                    "min_silence_duration_ms": min_silence_ms,
+                },
+                no_speech_threshold=no_speech_threshold,
+                condition_on_previous_text=condition_on_previous,
+                repetition_penalty=1.0,
+                prompt_reset_on_temperature=True,
             )
             return " ".join(s.text.strip() for s in segments).strip()
         except Exception:
