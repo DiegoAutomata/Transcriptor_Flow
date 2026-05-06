@@ -189,9 +189,9 @@ class Daemon:
             logger.info("Sin audio para transcribir.")
             return ""
 
-        logger.info("Transcribiendo final con modelo tiny…")
+        logger.info("Transcribiendo final con modelo small…")
         try:
-            final_text = self._transcriber.transcribe_realtime(audio)
+            final_text = self._transcriber.transcribe_final(audio)
         except Exception:
             logger.exception("Error en transcripción final")
             if self._tray:
