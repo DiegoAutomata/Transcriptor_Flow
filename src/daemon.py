@@ -16,6 +16,7 @@ from . import config
 from . import cleanup
 from .audio import AudioCapture
 from .transcriber import Transcriber
+from .transcriber_groq import transcribe as groq_transcribe, is_available as groq_available
 from .injector import TextInjector
 from .keyboard_handler import KeyboardHandler
 from .notifier import notify
@@ -94,7 +95,13 @@ class Daemon:
             self._tray.start()
             self._tray.set_idle()
 
-        self._transcriber = Transcriber()
+        self._use_groq = groq_available()
+        if self._use_groq:
+            logger.info("Groq API configurado — transcripción cloud rápida (~1s).")
+            self._transcriber = None  # No cargar modelos locales
+        else:
+            logger.info("Groq no configurado — usando modelos locales.")
+            self._transcriber = Transcriber()
 
         mode = "socket" if _is_wsl() else "pynput"
         logger.info("Modo de teclado: %s", mode)
@@ -167,9 +174,11 @@ class Daemon:
             if self._tray:
                 self._tray.set_error("Micrófono no disponible")
             return
-        self._rt_stop.clear()
-        self._rt_thread = threading.Thread(target=self._realtime_loop, daemon=True)
-        self._rt_thread.start()
+
+        if self._transcriber is not None:
+            self._rt_stop.clear()
+            self._rt_thread = threading.Thread(target=self._realtime_loop, daemon=True)
+            self._rt_thread.start()
 
         if self._tray and not _is_wsl():
             self._tray.set_recording()
@@ -197,9 +206,13 @@ class Daemon:
             logger.info("Grabación demasiado corta (%.1fs) — ignorada.", duration)
             return ""
 
-        logger.info("Transcribiendo final con modelo small…")
+        backend = "groq" if self._use_groq else "small"
+        logger.info("Transcribiendo final (%s)…", backend)
         try:
-            final_text = self._transcriber.transcribe_final(audio)
+            if self._use_groq:
+                final_text = groq_transcribe(audio)
+            else:
+                final_text = self._transcriber.transcribe_final(audio)
         except Exception:
             logger.exception("Error en transcripción final")
             if self._tray:
@@ -221,8 +234,9 @@ class Daemon:
         return self._last_transcription
 
     def _get_preview_text(self) -> str:
-        """Devuelve el texto en tiempo real crudo (para el bridge)."""
-        return self._raw_preview_text
+        """Devuelve el texto en tiempo real crudo (para el bridge).
+        Con Groq no hay preview en vivo — solo texto final."""
+        return "" if self._use_groq else self._raw_preview_text
 
     # ── Loop realtime ──────────────────────────────────────────────────────
 
