@@ -227,30 +227,50 @@ class Daemon:
     # ── Loop realtime ──────────────────────────────────────────────────────
 
     def _realtime_loop(self) -> None:
-        """Transcripción incremental cada 0.6s con modelo tiny."""
+        """Transcripción incremental: solo procesa audio nuevo desde última pasada."""
+        last_blocks = 0
+        full_text = ""
         while not self._rt_stop.wait(config.REALTIME_INTERVAL):
             if not self._recording:
                 continue
 
-            if self._audio.block_count < config.MIN_AUDIO_BLOCKS:
+            current_blocks = self._audio.block_count
+            if current_blocks < config.MIN_AUDIO_BLOCKS:
                 continue
 
-            snapshot = self._audio.buffer_snapshot
-            if snapshot is None:
+            new_block_count = current_blocks - last_blocks
+            if new_block_count < config.MIN_AUDIO_BLOCKS:
+                continue
+
+            # Obtener solo los bloques nuevos
+            try:
+                full_snapshot = self._audio.buffer_snapshot
+                if full_snapshot is None:
+                    continue
+                block_samples = config.BLOCK_SIZE
+                start_sample = last_blocks * block_samples
+                new_audio = full_snapshot[start_sample:]
+            except Exception:
+                continue
+
+            if len(new_audio) < block_samples * config.MIN_AUDIO_BLOCKS:
                 continue
 
             t0 = time.time()
             try:
-                text = self._transcriber.transcribe_realtime(snapshot)
+                text = self._transcriber.transcribe_realtime(new_audio)
             except Exception:
                 logger.exception("Error en transcripción realtime")
                 continue
 
             dt = time.time() - t0
+            last_blocks = current_blocks
 
             if text:
-                logger.info("[rt %.1fs] %s", dt, text)
-                cleaned = cleanup.apply_verbal_commands(text)
+                logger.info("[rt %.1fs (+%d bloques)] %s", dt, new_block_count, text)
+                # Concatenar con texto previo
+                full_text = f"{full_text} {text}".strip() if full_text else text
+                cleaned = cleanup.apply_verbal_commands(full_text)
                 self._raw_preview_text = cleaned
                 if not self._rt_stop.is_set():
                     self._injected_text = self._injector.append_delta(cleaned, self._injected_text)
