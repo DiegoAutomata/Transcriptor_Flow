@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 
 GROQ_MODEL = "whisper-large-v3-turbo"
 
+# Prompt para mejorar precisión en español — guía al modelo con vocabulario común
+_WHISPER_PROMPT = (
+    "Transcripción de dictado por voz en español. "
+    "El hablante dicta de forma natural, clara y fluida."
+)
+
+# Umbral RMS mínimo para considerar que hay voz
+_RMS_THRESHOLD = 0.008
+
 
 def _get_client() -> Groq | None:
     api_key = os.environ.get("GROQ_API_KEY", "")
@@ -47,8 +56,9 @@ def transcribe(audio: np.ndarray, client: Groq | None = None) -> str:
 
     # Filtrar silencio: no enviar audio sin voz a la API
     rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
-    if rms < 0.005:
-        logger.debug("Audio descartado (silencio, RMS=%.5f)", rms)
+    logger.debug("Audio RMS=%.5f (threshold=%.3f)", rms, _RMS_THRESHOLD)
+    if rms < _RMS_THRESHOLD:
+        logger.info("Audio descartado (silencio, RMS=%.5f)", rms)
         return ""
 
     try:
@@ -67,6 +77,7 @@ def transcribe(audio: np.ndarray, client: Groq | None = None) -> str:
             model=GROQ_MODEL,
             file=buf,
             language=WHISPER_LANGUAGE,
+            prompt=_WHISPER_PROMPT,
             response_format="json",
             temperature=0,
         )
