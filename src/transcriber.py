@@ -41,21 +41,22 @@ class Transcriber:
         logger.info("Modelos cargados.")
 
     def transcribe_realtime(self, audio: np.ndarray) -> str:
-        """Transcribe con modelo base (balance velocidad/precisión para preview)."""
-        return self._transcribe(audio, self._base, vad_threshold=RT_VAD_THRESHOLD,
-                                no_speech_threshold=RT_NO_SPEECH_THRESH,
-                                min_silence_ms=RT_VAD_MIN_SILENCE_MS)
+        """Transcribe con modelo base + beam_size=1 (rápido, ~0.4s para preview)."""
+        return self._transcribe(audio, self._base, beam_size=1, use_vad=False)
 
     def transcribe_final(self, audio: np.ndarray) -> str:
-        """Transcribe con modelo small (preciso, resultado final)."""
-        return self._transcribe(audio, self._small, vad_threshold=WHISPER_VAD_THRESHOLD,
+        """Transcribe con modelo small + beam_size=5 (preciso, resultado final)."""
+        return self._transcribe(audio, self._small,
+                                vad_threshold=WHISPER_VAD_THRESHOLD,
                                 no_speech_threshold=WHISPER_NO_SPEECH_THRESH,
                                 min_silence_ms=WHISPER_VAD_MIN_SILENCE_MS,
                                 condition_on_previous=True)
 
     def _transcribe(self, audio: np.ndarray, model: WhisperModel,
+                    beam_size: int = WHISPER_BEAM_SIZE,
                     vad_threshold: float = 0.5, no_speech_threshold: float = 0.6,
-                    min_silence_ms: int = 100, condition_on_previous: bool = False) -> str:
+                    min_silence_ms: int = 100, condition_on_previous: bool = False,
+                    use_vad: bool = True) -> str:
         tmp = ""
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -67,21 +68,23 @@ class Transcriber:
                 wf.setframerate(SAMPLE_RATE)
                 wf.writeframes(pcm.tobytes())
 
-            segments, _info = model.transcribe(
-                tmp,
-                language=WHISPER_LANGUAGE,
-                beam_size=WHISPER_BEAM_SIZE,
-                temperature=0,
-                vad_filter=True,
-                vad_parameters={
+            transcribe_kwargs = {
+                "language": WHISPER_LANGUAGE,
+                "beam_size": beam_size,
+                "temperature": 0,
+                "condition_on_previous_text": condition_on_previous,
+                "repetition_penalty": 1.0,
+                "prompt_reset_on_temperature": True,
+            }
+            if use_vad:
+                transcribe_kwargs["vad_filter"] = True
+                transcribe_kwargs["vad_parameters"] = {
                     "threshold": vad_threshold,
                     "min_silence_duration_ms": min_silence_ms,
-                },
-                no_speech_threshold=no_speech_threshold,
-                condition_on_previous_text=condition_on_previous,
-                repetition_penalty=1.0,
-                prompt_reset_on_temperature=True,
-            )
+                }
+                transcribe_kwargs["no_speech_threshold"] = no_speech_threshold
+
+            segments, _info = model.transcribe(tmp, **transcribe_kwargs)
             return " ".join(s.text.strip() for s in segments).strip()
         except Exception:
             logger.exception("Error en transcripción")
