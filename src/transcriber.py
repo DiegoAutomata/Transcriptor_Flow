@@ -42,7 +42,8 @@ class Transcriber:
 
     def transcribe_realtime(self, audio: np.ndarray) -> str:
         """Transcribe con modelo base + beam_size=1 (rápido, ~0.4s para preview)."""
-        return self._transcribe(audio, self._base, beam_size=1, use_vad=False)
+        return self._transcribe(audio, self._base, beam_size=1, use_vad=False,
+                                no_speech_threshold=0.99)
 
     def transcribe_final(self, audio: np.ndarray) -> str:
         """Transcribe con modelo small + beam_size=5 (preciso, resultado final)."""
@@ -75,6 +76,7 @@ class Transcriber:
                 "condition_on_previous_text": condition_on_previous,
                 "repetition_penalty": 1.0,
                 "prompt_reset_on_temperature": True,
+                "no_speech_threshold": no_speech_threshold,
             }
             if use_vad:
                 transcribe_kwargs["vad_filter"] = True
@@ -82,7 +84,6 @@ class Transcriber:
                     "threshold": vad_threshold,
                     "min_silence_duration_ms": min_silence_ms,
                 }
-                transcribe_kwargs["no_speech_threshold"] = no_speech_threshold
 
             segments, _info = model.transcribe(tmp, **transcribe_kwargs)
             return " ".join(s.text.strip() for s in segments).strip()
