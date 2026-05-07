@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 
 
 class Transcriber:
-    """Carga y gestiona modelos faster-whisper: base (preview), small (final)."""
+    """Carga y gestiona modelos faster-whisper: tiny (preview), base (preview), small (final)."""
 
     def __init__(self) -> None:
-        logger.info("Cargando modelo base (preview)…")
-        self._base = WhisperModel(
-            "base", device="cpu", compute_type="int8",
+        logger.info("Cargando modelo tiny (preview rápido)…")
+        self._tiny = WhisperModel(
+            "tiny", device="cpu", compute_type="int8",
             cpu_threads=WHISPER_CPU_THREADS,
         )
         logger.info("Cargando modelo small (final)…")
@@ -41,8 +41,8 @@ class Transcriber:
         logger.info("Modelos cargados.")
 
     def transcribe_realtime(self, audio: np.ndarray) -> str:
-        """Transcribe con modelo base + beam_size=1 (rápido, ~0.4s para preview)."""
-        return self._transcribe(audio, self._base, beam_size=1, use_vad=False,
+        """Transcribe con modelo tiny + beam_size=1 + sin VAD (máxima velocidad)."""
+        return self._transcribe(audio, self._tiny, beam_size=1, use_vad=False,
                                 no_speech_threshold=0.99)
 
     def transcribe_final(self, audio: np.ndarray) -> str:

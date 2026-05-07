@@ -8,8 +8,8 @@ VERSION  = "6.0.0"
 
 SAMPLE_RATE       = 16000
 BLOCK_SIZE        = int(SAMPLE_RATE * 0.1)
-REALTIME_INTERVAL = 0.3
-MIN_AUDIO_BLOCKS  = 3
+REALTIME_INTERVAL = 0.2
+MIN_AUDIO_BLOCKS  = 2
 MIN_RECORDING_S   = 0.4  # Duración mínima para considerar una grabación válida
 
 WHISPER_LANGUAGE         = "es"
