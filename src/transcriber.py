@@ -1,8 +1,5 @@
 """Transcripción con faster-whisper (tiny para realtime, small para final)."""
 
-import os
-import wave
-import tempfile
 import logging
 
 import numpy as np
@@ -58,16 +55,9 @@ class Transcriber:
                     vad_threshold: float = 0.5, no_speech_threshold: float = 0.6,
                     min_silence_ms: int = 100, condition_on_previous: bool = False,
                     use_vad: bool = True) -> str:
-        tmp = ""
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                tmp = f.name
-            pcm = (audio * 32767).astype(np.int16)
-            with wave.open(tmp, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(SAMPLE_RATE)
-                wf.writeframes(pcm.tobytes())
+            # faster-whisper acepta numpy array directamente — sin WAV intermedio
+            audio_f32 = audio.astype(np.float32)
 
             transcribe_kwargs = {
                 "language": WHISPER_LANGUAGE,
@@ -85,14 +75,8 @@ class Transcriber:
                     "min_silence_duration_ms": min_silence_ms,
                 }
 
-            segments, _info = model.transcribe(tmp, **transcribe_kwargs)
+            segments, _info = model.transcribe(audio_f32, **transcribe_kwargs)
             return " ".join(s.text.strip() for s in segments).strip()
         except Exception:
             logger.exception("Error en transcripción")
             return ""
-        finally:
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
