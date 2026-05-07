@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config
+from . import cleanup
 from .audio import AudioCapture
 from .transcriber import Transcriber
 from .injector import TextInjector
@@ -191,6 +192,11 @@ class Daemon:
             logger.info("Sin audio para transcribir.")
             return ""
 
+        duration = len(audio) / config.SAMPLE_RATE
+        if duration < config.MIN_RECORDING_S:
+            logger.info("Grabación demasiado corta (%.1fs) — ignorada.", duration)
+            return ""
+
         logger.info("Transcribiendo final con modelo small…")
         try:
             final_text = self._transcriber.transcribe_final(audio)
@@ -199,6 +205,8 @@ class Daemon:
             if self._tray:
                 self._tray.set_error("Error al transcribir")
             return ""
+
+        final_text = cleanup.process(final_text)
 
         if final_text:
             logger.info("Texto final: %s", final_text)
@@ -242,9 +250,10 @@ class Daemon:
 
             if text:
                 logger.info("[rt %.1fs] %s", dt, text)
-                self._raw_preview_text = text
+                cleaned = cleanup.apply_verbal_commands(text)
+                self._raw_preview_text = cleaned
                 if not self._rt_stop.is_set():
-                    self._injected_text = self._injector.append_delta(text, self._injected_text)
+                    self._injected_text = self._injector.append_delta(cleaned, self._injected_text)
 
     # ── Bridge Win32 (WSL) ────────────────────────────────────────────────
 
