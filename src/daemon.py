@@ -20,7 +20,12 @@ from .transcriber_groq import transcribe as groq_transcribe, is_available as gro
 from .injector import TextInjector
 from .keyboard_handler import KeyboardHandler
 from .notifier import notify
-from .tray_icon import TrayIcon
+try:
+    from .tray_icon import TrayIcon
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).warning(f"No se pudo cargar TrayIcon: {e}")
+    TrayIcon = None
 
 
 logger = logging.getLogger("transcriptor-flow")
@@ -90,7 +95,7 @@ class Daemon:
         setup_logging(self._debug)
         logger.info("Transcriptor Flow %s iniciando…", config.VERSION)
 
-        self._tray = TrayIcon(on_exit=self.shutdown)
+        self._tray = TrayIcon(on_exit=self.shutdown) if TrayIcon else None
         if not _is_wsl():
             self._tray.start()
             self._tray.set_idle()

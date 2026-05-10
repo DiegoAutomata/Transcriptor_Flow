@@ -1,7 +1,7 @@
 [Unit]
 Description=Transcriptor Flow — Dictado por voz en tiempo real
-After=graphical-session.target
-PartOf=graphical-session.target
+After=default.target
+PartOf=default.target
 
 [Service]
 Type=simple
@@ -22,4 +22,4 @@ KillSignal=SIGTERM
 TimeoutStopSec=10
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target
